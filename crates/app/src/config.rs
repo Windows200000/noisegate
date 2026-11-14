@@ -37,7 +37,7 @@ pub struct Config {
     #[serde(default = "default_auto")]
     pub input_channel: String,
     /// User answered "No" to the "install VB-Cable?" prompt; don't ask again
-    /// (the tray menu still has the install link).
+    /// (the settings panel still has an install button).
     #[serde(default)]
     pub vbcable_prompt_dismissed: bool,
     /// Auto-start at user login.

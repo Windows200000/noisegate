@@ -34,7 +34,7 @@ Three dedicated MMCSS-priority threads. Lock-free SPSC ring buffers (8 frames â‰
 
 ## Noise suppression models
 
-Pick the model and strength in the tray menu; the choice is saved.
+Pick the model and strength in the settings panel; the choice is saved.
 
 | Model | Default? | Quality | CPU (one core) | Latency |
 |---|---|---|---|---|
@@ -80,7 +80,7 @@ NoiseGate needs a virtual cable to hand your cleaned voice to other apps. It pic
 - **VoiceMeeter**: pick **VoiceMeeter Output** as the mic.
 - **Steam Streaming Microphone** (installed with Steam): pick **Microphone (Steam Streaming Microphone)** as the mic. This cable doesn't convert formats, so its microphone side must use the same format as its speaker side (usually 48 kHz stereo). NoiseGate detects a mismatch, shows a warning, and walks you through fixing it in the Sound control panel.
 
-If none is installed, NoiseGate offers to open the VB-Cable download page. After installing one, choose **Refresh devices** in the tray menu. The menu always shows what to select in other apps.
+If none is installed, NoiseGate offers to open the VB-Cable download page. After installing one, choose **Refresh devices** in the settings panel. The panel always shows what to select in other apps.
 
 Then, in TeamSpeak / Discord / Zoom / Teams / OBS, choose the virtual mic as your microphone, and turn off the app's own noise suppression so the two don't fight.
 
@@ -96,7 +96,7 @@ The tray icon shows the state, and morphs smoothly between states:
 | Grey, wiggly line | Noise removal off: your mic passes through unfiltered. |
 | Amber, "!" | Needs attention: no virtual mic, a cable format mismatch, or the audio device stopped (NoiseGate retries every few seconds). |
 
-**Left-click** the icon to open the settings panel above the taskbar. It stays open while you change things and closes when you click elsewhere or press Esc:
+**Click** the icon (left or right) to open the settings panel above the taskbar. It stays open while you change things and closes when you click elsewhere or press Esc:
 
 - **On/off switch** and the current status.
 - **Microphone**: which physical mic to clean (system default or a specific one). For 2-channel devices (audio interfaces), which input to use: Auto (the inputs that carry signal), Input 1, Input 2 or Both.
@@ -106,9 +106,9 @@ The tray icon shows the state, and morphs smoothly between states:
 - **Start with Windows**: start NoiseGate when you log in (a per-user entry, visible in Task Manager â†’ Startup apps).
 - **Refresh devices** (after plugging in a mic or installing a cable), **Logs**, **Quit**, and the CPU use.
 
-**Right-click** opens a menu with the same settings for quick access; clicking its header opens the panel.
+**Right-click** does the same; there is no separate menu.
 
-The panel and menu follow Windows' light or dark app mode. Hovering the icon shows the status, model, strength and CPU use.
+The panel follows Windows' light or dark app mode. Hovering the icon shows the status, model, strength and CPU use.
 
 ## Command line
 

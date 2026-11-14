@@ -127,7 +127,7 @@ fn run() -> Result<()> {
     log_input_devices();
 
     let mut cfg_value = config::Config::load_or_default();
-    // Apply CLI overrides (don't persist them — that's what the tray menu
+    // Apply CLI overrides (don't persist them — that's what the settings panel
     // is for once it's wired up).
     if let Some(out_filter) = args.out.as_deref() {
         match resolve_device_by_substring(out_filter, audio_io::DeviceDirection::Render) {

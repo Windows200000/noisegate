@@ -1,6 +1,5 @@
-//! System tray: the icon (which morphs between its states, see `Look`), a
-//! left-click settings panel (`crate::panel`) and a right-click menu with the
-//! same settings for quick access.
+//! System tray: the icon (which morphs between its states, see `Look`) and
+//! the settings panel (`crate::panel`), opened by a left or right click.
 //!
 //! `tray-icon` needs a window-message pump on the main thread, so we drive
 //! it with a `winit` event loop (no actual window — just the tray icon).
@@ -13,11 +12,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tracing::{error, info};
-use tray_icon::menu::{
-    CheckMenuItem, Icon as MenuIcon, IconMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem,
-    Submenu,
-};
-use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use winit::application::ApplicationHandler;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 
@@ -33,28 +28,6 @@ const VBCABLE_URL: &str = "https://vb-audio.com/Cable/";
 
 fn open_url(url: &str) {
     let _ = std::process::Command::new("explorer").arg(url).spawn();
-}
-
-/// Menu text for the virtual-mic status item, and whether it's clickable
-/// (only when there's something to install).
-fn cable_item_text(p: Option<&Pipeline>) -> (String, bool) {
-    if let Some(m) = p.and_then(|p| p.rate_mismatch()) {
-        return (
-            format!(
-                "⚠ Virtual mic is {}, needs {} — fix…",
-                m.mic_format(),
-                m.speaker_format()
-            ),
-            true,
-        );
-    }
-    match p.map(|p| p.output()) {
-        Some(Output::Cable(c)) => (format!("In other apps, pick \"{}\"", c.mic_name), false),
-        Some(Output::Manual) => ("Output: custom device (--out / config)".into(), false),
-        Some(Output::DefaultSpeakers) | None => {
-            ("Install a virtual mic (VB-Cable)…".into(), true)
-        }
-    }
 }
 
 /// Explain the sample-rate mismatch and open the Recording tab of the Sound
@@ -73,9 +46,9 @@ fn show_rate_fix(m: &crate::pipeline::RateMismatch) {
          1. In the Sound window that opens, go to the Recording tab.\n\
          2. Right-click \"{mic}\" → Properties → Advanced.\n\
          3. Set Default Format to {spk_fmt} and click OK.\n\
-         4. In the NoiseGate tray menu, choose \"Refresh devices\".\n\n\
+         4. Click the NoiseGate tray icon and choose \"Refresh devices\".\n\n\
          If that format isn't offered, this cable can't carry NoiseGate's audio \
-         correctly — install VB-Cable instead (tray menu → Output).\n\n\
+         correctly — install VB-Cable instead (NoiseGate panel → Virtual mic).\n\n\
          Open Sound settings now?",
         mic = m.mic_name,
         mic_fmt = m.mic_format(),
@@ -109,10 +82,10 @@ fn prompt_install_vbcable(cfg: &Arc<RwLock<Config>>) {
                 Open the VB-Cable download page now?\n\n\
                 To install: unzip it, right-click VBCABLE_Setup_x64.exe → Run as \
                 administrator, then restart Windows if asked. Afterwards choose \
-                \"Refresh devices\" in the NoiseGate tray menu (or restart NoiseGate) \
+                \"Refresh devices\" in the NoiseGate panel (or restart NoiseGate) \
                 and select \"CABLE Output (VB-Audio Virtual Cable)\" as your mic in \
                 other apps.\n\n\
-                \"No\" won't ask again; the tray menu keeps an install link.";
+                \"No\" won't ask again; the NoiseGate panel keeps an install button.";
     let answer = unsafe {
         MessageBoxW(
             HWND::default(),
@@ -148,12 +121,7 @@ const IDLE_TICK: Duration = Duration::from_millis(500);
 pub fn run(cfg: Arc<RwLock<Config>>, pipeline: Pipeline) -> Result<()> {
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
 
-    // Forward menu and tray-icon events to winit so we run on a single
-    // event loop.
-    let proxy = event_loop.create_proxy();
-    MenuEvent::set_event_handler(Some(move |e| {
-        let _ = proxy.send_event(UserEvent::Menu(e));
-    }));
+    // Forward tray-icon events to winit so we run on a single event loop.
     let proxy = event_loop.create_proxy();
     TrayIconEvent::set_event_handler(Some(move |e| {
         let _ = proxy.send_event(UserEvent::Tray(e));
@@ -164,7 +132,6 @@ pub fn run(cfg: Arc<RwLock<Config>>, pipeline: Pipeline) -> Result<()> {
         pipeline: Some(pipeline),
         last_error: None,
         tray: None,
-        items: None,
         panel: None,
         proxy: event_loop.create_proxy(),
         mic_list: list_mics(),
@@ -182,7 +149,6 @@ pub fn run(cfg: Arc<RwLock<Config>>, pipeline: Pipeline) -> Result<()> {
 
 #[derive(Debug)]
 enum UserEvent {
-    Menu(MenuEvent),
     Tray(TrayIconEvent),
     /// egui wants the panel repainted after this delay.
     PanelRepaint(Duration),
@@ -200,7 +166,6 @@ struct App {
     pipeline: Option<Pipeline>,
     last_error: Option<String>,
     tray: Option<TrayIcon>,
-    items: Option<Items>,
     /// Settings flyout; created on first open.
     panel: Option<Panel>,
     proxy: EventLoopProxy<UserEvent>,
@@ -225,35 +190,6 @@ struct IconAnim {
     to: IconState,
     start: Instant,
     last_frame: Instant,
-}
-
-/// The right-click menu. Native menus close on every click, so it's the
-/// quick-access route; the left-click panel is the comfortable one.
-struct Items {
-    /// Status line at the top, with the state icon; opens the panel.
-    header: IconMenuItem,
-    enable: CheckMenuItem,
-    /// Microphone submenu; rebuilt by "Refresh devices".
-    mic_menu: Submenu,
-    /// (item, capture device id — empty = system default)
-    mics: Vec<(CheckMenuItem, String)>,
-    refresh: MenuItem,
-    /// Output submenu; rebuilt by "Refresh devices".
-    out_menu: Submenu,
-    /// (item, render device id — empty = automatic)
-    outs: Vec<(CheckMenuItem, String)>,
-    /// What to select in other apps / "install VB-Cable" link / format fix.
-    cable: MenuItem,
-    model_menu: Submenu,
-    /// (item, backend key)
-    models: Vec<(CheckMenuItem, &'static str)>,
-    strength_menu: Submenu,
-    /// (item, attenuation limit dB)
-    strengths: Vec<(CheckMenuItem, f32)>,
-    post_filter: CheckMenuItem,
-    autostart: CheckMenuItem,
-    open_logs: MenuItem,
-    quit: MenuItem,
 }
 
 /// Shorten `s` to at most `max` characters, ending in "…" if cut.
@@ -300,56 +236,6 @@ fn list_outputs() -> Vec<(String, String, bool)> {
         .map(|d| (d.id.clone(), d.virtual_cable().unwrap().label.to_string(), true))
         .chain(others.iter().map(|d| (d.id.clone(), format!("{} (speaker, not a mic)", d.friendly_name), false)))
         .collect()
-}
-
-fn fill_out_menu(menu: &Submenu, list: &[(String, String, bool)], selected: &str) -> Vec<(CheckMenuItem, String)> {
-    let mut out = vec![(
-        CheckMenuItem::new("Automatic (best virtual mic)", true, selected.is_empty(), None),
-        String::new(),
-    )];
-    menu.append(&out[0].0).ok();
-    let mut prev_cable = None;
-    for (id, label, cable) in list {
-        if prev_cable != Some(*cable) {
-            menu.append(&PredefinedMenuItem::separator()).ok();
-            prev_cable = Some(*cable);
-        }
-        let item = CheckMenuItem::new(label, true, id == selected, None);
-        menu.append(&item).ok();
-        out.push((item, id.clone()));
-    }
-    out
-}
-
-fn fill_mic_menu(menu: &Submenu, list: &[(String, String)], selected: &str) -> Vec<(CheckMenuItem, String)> {
-    let mut out = vec![(
-        CheckMenuItem::new("System default", true, selected.is_empty(), None),
-        String::new(),
-    )];
-    menu.append(&out[0].0).ok();
-    if !list.is_empty() {
-        menu.append(&PredefinedMenuItem::separator()).ok();
-    }
-    for (id, name) in list {
-        let item = CheckMenuItem::new(name, true, id == selected, None);
-        menu.append(&item).ok();
-        out.push((item, id.clone()));
-    }
-    out
-}
-
-/// Remove every entry (items and separators) from a submenu.
-fn clear_submenu(menu: &Submenu) {
-    use tray_icon::menu::MenuItemKind as K;
-    for item in menu.items() {
-        let _ = match &item {
-            K::MenuItem(i) => menu.remove(i),
-            K::Check(i) => menu.remove(i),
-            K::Predefined(i) => menu.remove(i),
-            K::Submenu(i) => menu.remove(i),
-            K::Icon(i) => menu.remove(i),
-        };
-    }
 }
 
 impl App {
@@ -427,7 +313,7 @@ impl App {
             .unwrap_or("Custom")
     }
 
-    /// One-line status for the menu header, panel and tooltip.
+    /// One-line status for the panel and tooltip.
     fn status_text(&self) -> String {
         match &self.pipeline {
             None => match &self.last_error {
@@ -500,7 +386,7 @@ impl App {
         }
     }
 
-    /// Apply a user action from the panel or the menu.
+    /// Apply a user action from the panel.
     fn apply(&mut self, action: PanelAction, event_loop: &ActiveEventLoop) {
         let mut restart = false;
         match action {
@@ -622,27 +508,17 @@ impl App {
         } else {
             self.refresh_ui();
         }
-        self.sync_menu_checks();
         if let Some(panel) = &self.panel {
             panel.request_redraw();
         }
     }
 
-    /// Re-read the device lists and rebuild the menus. Returns whether the
+    /// Re-read the device lists. Returns whether the
     /// pipeline should restart to pick up a newly installed or fixed cable.
     fn refresh_devices(&mut self) -> bool {
         self.mic_list = list_mics();
         self.out_list = list_outputs();
-        let (selected, selected_out, auto_output) = {
-            let c = self.cfg.read().unwrap();
-            (c.input_device_id.clone(), c.output_device_id.clone(), c.output_device_id.is_empty())
-        };
-        if let Some(items) = &mut self.items {
-            clear_submenu(&items.mic_menu);
-            clear_submenu(&items.out_menu);
-            items.mics = fill_mic_menu(&items.mic_menu, &self.mic_list, &selected);
-            items.outs = fill_out_menu(&items.out_menu, &self.out_list, &selected_out);
-        }
+        let auto_output = self.cfg.read().unwrap().output_device_id.is_empty();
         info!(mics = self.mic_list.len(), outputs = self.out_list.len(), "device lists refreshed");
         // A virtual cable may have just been installed: re-resolve the
         // output if we're on the speaker fallback (or stopped).
@@ -655,71 +531,11 @@ impl App {
         (auto_output && on_fallback) || mismatch
     }
 
-    /// Make the menu's check marks match the config (the panel can change it).
-    fn sync_menu_checks(&self) {
-        let Some(items) = &self.items else { return };
-        let c = self.cfg.read().unwrap();
-        items.enable.set_checked(self.is_enabled());
-        for (i, id) in &items.mics {
-            i.set_checked(*id == c.input_device_id);
-        }
-        for (i, id) in &items.outs {
-            i.set_checked(*id == c.output_device_id);
-        }
-        let key = self.model_key();
-        for (i, k) in &items.models {
-            i.set_checked(*k == key);
-        }
-        for (i, db) in &items.strengths {
-            i.set_checked((c.attenuation_db - db).abs() < 0.5);
-        }
-        items.post_filter.set_checked(c.post_filter);
-        items.autostart.set_checked(self.autostart);
-    }
-
-    /// Refresh everything that reflects state: icon, tooltip, menu labels.
+    /// Refresh everything that reflects state: icon and tooltip (the panel
+    /// redraws from `panel_model`).
     fn refresh_ui(&mut self) {
         self.refresh_icon();
         self.refresh_tooltip();
-        self.refresh_labels();
-    }
-
-    fn refresh_labels(&self) {
-        let Some(items) = &self.items else { return };
-        let header = format!("NoiseGate  ·  {}", self.status_text());
-        if items.header.text() != header {
-            items.header.set_text(header);
-            items.header.set_icon(Some(menu_icon(self.icon_state)));
-        }
-
-        let (text, enabled) = cable_item_text(self.pipeline.as_ref());
-        items.cable.set_text(text);
-        items.cable.set_enabled(enabled);
-
-        let input = self.cfg.read().unwrap().input_device_id.clone();
-        let mic = self
-            .mic_list
-            .iter()
-            .find(|(id, _)| *id == input)
-            .map(|(_, n)| n.clone())
-            .unwrap_or_else(|| "System default".into());
-        items.mic_menu.set_text(format!("Microphone:  {}", ellipsize(&mic, 34)));
-        let out = match self.pipeline.as_ref().map(|p| p.output()) {
-            Some(Output::Cable(c)) => c.label.to_string(),
-            Some(Output::Manual) => "custom device".into(),
-            Some(Output::DefaultSpeakers) => "none found".into(),
-            None => "—".into(),
-        };
-        items.out_menu.set_text(format!("Virtual mic:  {out}"));
-        items.model_menu.set_text(format!("Model:  {}", self.model_name()));
-        let uses_strength = self.uses_strength();
-        items.strength_menu.set_enabled(uses_strength);
-        items.strength_menu.set_text(if uses_strength {
-            let pf = if self.cfg.read().unwrap().post_filter { " + extra cleanup" } else { "" };
-            format!("Strength:  {}{pf}", self.strength_name())
-        } else {
-            "Strength:  (DeepFilterNet3 only)".into()
-        });
     }
 
     fn refresh_tooltip(&self) {
@@ -813,102 +629,17 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         let cfg = self.cfg.read().unwrap().clone();
-        let enabled = self.is_enabled();
-        crate::theme::sync_menu_theme();
-
-        let menu = Menu::new();
-        let header = IconMenuItem::new("NoiseGate", true, None, None);
-        let enable = CheckMenuItem::new("Noise removal", true, enabled, None);
-
-        let mic_menu = Submenu::new("Microphone", true);
-        let mics = fill_mic_menu(&mic_menu, &self.mic_list, &cfg.input_device_id);
-        let out_menu = Submenu::new("Virtual mic", true);
-        let outs = fill_out_menu(&out_menu, &self.out_list, &cfg.output_device_id);
-        let refresh = MenuItem::new("Refresh devices", true, None);
-        let (cable_text, cable_enabled) = cable_item_text(self.pipeline.as_ref());
-        let cable = MenuItem::new(cable_text, cable_enabled, None);
-
-        let model_menu = Submenu::new("Model", true);
-        let current = self.model_key();
-        let models: Vec<_> = dsp::BACKENDS
-            .iter()
-            .map(|b| (CheckMenuItem::new(b.label, true, b.key == current, None), b.key))
-            .collect();
-        for (item, _) in &models {
-            model_menu.append(item).ok();
-        }
-        let strength_menu = Submenu::new("Strength", true);
-        let strengths: Vec<_> = STRENGTHS
-            .iter()
-            .map(|&(label, db)| {
-                let checked = (cfg.attenuation_db - db).abs() < 0.5;
-                (CheckMenuItem::new(label, true, checked, None), db)
-            })
-            .collect();
-        for (item, _) in &strengths {
-            strength_menu.append(item).ok();
-        }
-        let post_filter = CheckMenuItem::new("Extra cleanup for clicks and crinkles", true, cfg.post_filter, None);
-        strength_menu.append(&PredefinedMenuItem::separator()).ok();
-        strength_menu.append(&post_filter).ok();
-
-        let autostart = CheckMenuItem::new("Start with Windows", true, self.autostart, None);
-        let open_logs = MenuItem::new("Open log folder", true, None);
-        let quit = MenuItem::new("Quit NoiseGate", true, None);
-
-        let sep = PredefinedMenuItem::separator;
-        menu.append(&header).ok();
-        menu.append(&sep()).ok();
-        menu.append(&enable).ok();
-        menu.append(&sep()).ok();
-        menu.append(&mic_menu).ok();
-        menu.append(&out_menu).ok();
-        menu.append(&cable).ok();
-        menu.append(&refresh).ok();
-        menu.append(&sep()).ok();
-        menu.append(&model_menu).ok();
-        menu.append(&strength_menu).ok();
-        menu.append(&sep()).ok();
-        menu.append(&autostart).ok();
-        menu.append(&open_logs).ok();
-        menu.append(&sep()).ok();
-        menu.append(&quit).ok();
 
         // Start from the "off" look so the icon visibly settles into its
-        // state at launch.
+        // state at launch. No native menu: both clicks open the panel.
         let tray = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
             .with_tooltip("NoiseGate — starting")
             .with_icon(build_icon(&self.shown))
             .build()
             .expect("build tray icon");
-
         self.tray = Some(tray);
-        self.items = Some(Items {
-            header,
-            enable,
-            mic_menu,
-            mics,
-            refresh,
-            out_menu,
-            outs,
-            cable,
-            model_menu,
-            models,
-            strength_menu,
-            strengths,
-            post_filter,
-            autostart,
-            open_logs,
-            quit,
-        });
         self.refresh_ui();
-        // The header icon is only set when its text changes; make sure the
-        // first one matches.
-        if let Some(items) = &self.items {
-            items.header.set_icon(Some(menu_icon(self.icon_state)));
-        }
 
         let no_cable = matches!(
             self.pipeline.as_ref().map(|p| p.output()),
@@ -924,59 +655,19 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, ev: UserEvent) {
-        let id = match ev {
-            UserEvent::Menu(MenuEvent { id }) => id,
-            // Left click opens the settings panel; right click opens the
-            // menu (handled by tray-icon).
-            UserEvent::Tray(TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                rect,
-                ..
-            }) => {
+        match ev {
+            // Left or right click opens (or closes) the settings panel.
+            UserEvent::Tray(TrayIconEvent::Click { button_state: MouseButtonState::Up, rect, .. }) => {
                 self.toggle_panel(event_loop, Some(rect));
-                return;
             }
-            UserEvent::Tray(_) => return,
+            UserEvent::Tray(_) => {}
             UserEvent::PanelRepaint(delay) => {
                 if let Some(panel) = &mut self.panel {
                     let at = Instant::now() + delay;
                     panel.repaint_at = Some(panel.repaint_at.map_or(at, |t| t.min(at)));
                 }
-                return;
             }
-        };
-        let Some(items) = &self.items else { return };
-
-        let action = if id == items.header.id() {
-            self.toggle_panel(event_loop, None);
-            return;
-        } else if id == items.enable.id() {
-            PanelAction::SetEnabled(items.enable.is_checked())
-        } else if let Some((_, dev)) = items.mics.iter().find(|(i, _)| i.id() == &id) {
-            PanelAction::PickMic(dev.clone())
-        } else if let Some((_, dev)) = items.outs.iter().find(|(i, _)| i.id() == &id) {
-            PanelAction::PickOutput(dev.clone())
-        } else if id == items.refresh.id() {
-            PanelAction::Refresh
-        } else if id == items.cable.id() {
-            PanelAction::HintButton
-        } else if let Some(&(_, key)) = items.models.iter().find(|(i, _)| i.id() == &id) {
-            PanelAction::PickModel(key)
-        } else if let Some(&(_, db)) = items.strengths.iter().find(|(i, _)| i.id() == &id) {
-            PanelAction::PickStrength(db)
-        } else if id == items.post_filter.id() {
-            PanelAction::SetPostFilter(items.post_filter.is_checked())
-        } else if id == items.autostart.id() {
-            PanelAction::SetAutostart(items.autostart.is_checked())
-        } else if id == items.open_logs.id() {
-            PanelAction::OpenLogs
-        } else if id == items.quit.id() {
-            PanelAction::Quit
-        } else {
-            return;
-        };
-        self.apply(action, event_loop);
+        }
     }
 
     fn window_event(
@@ -1014,7 +705,6 @@ impl ApplicationHandler<UserEvent> for App {
         if self.last_tooltip_update.elapsed() >= Duration::from_millis(1000) {
             self.last_tooltip_update = Instant::now();
             self.refresh_ui();
-            crate::theme::sync_menu_theme();
             // Keep the panel's status / CPU line current.
             if let Some(panel) = &self.panel {
                 panel.request_redraw();
@@ -1114,9 +804,6 @@ fn look(state: IconState) -> Look {
 
 /// Tray icon size; drawn at this resolution, Windows scales for the tray.
 const ICON_N: usize = 32;
-/// Menu item icons are shown at 16 px; drawn at that size to stay crisp.
-const MENU_ICON_N: usize = 16;
-
 /// Draw the icon procedurally (no .ico, no build.rs) as n×n RGBA,
 /// anti-aliased by 4x4 supersampling. Geometry is defined on a 32-unit grid
 /// and scaled to `n`. One bold shape per state so it reads at 16 px:
@@ -1224,11 +911,6 @@ fn build_icon(lk: &Look) -> tray_icon::Icon {
 /// A state's icon as n×n RGBA (for the settings panel).
 pub(crate) fn state_icon_rgba(state: IconState, n: usize) -> Vec<u8> {
     icon_rgba(&look(state), n)
-}
-
-fn menu_icon(state: IconState) -> MenuIcon {
-    MenuIcon::from_rgba(icon_rgba(&look(state), MENU_ICON_N), MENU_ICON_N as u32, MENU_ICON_N as u32)
-        .expect("valid icon")
 }
 
 /// `--dump-icons <dir>`: write each state's icon as raw 32x32 RGBA
