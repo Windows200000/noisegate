@@ -26,8 +26,16 @@ pub struct DeepFilter {
 impl DeepFilter {
     /// `atten_lim_db` caps how much noise is removed. 100 = unlimited;
     /// lower values (e.g. 12–24) sound more natural and keep more room tone.
-    pub fn new(atten_lim_db: f32) -> Result<Self> {
-        let rp = RuntimeParams::default_with_ch(1).with_atten_lim(atten_lim_db);
+    ///
+    /// `post_filter` enables DeepFilterNet's post-filter (β = 0.02, the
+    /// paper's value): it further attenuates time-frequency bins the model
+    /// is unsure about, which removes residual bursts (crinkling, clicks)
+    /// at a small cost in voice naturalness.
+    pub fn new(atten_lim_db: f32, post_filter: bool) -> Result<Self> {
+        let mut rp = RuntimeParams::default_with_ch(1).with_atten_lim(atten_lim_db);
+        if post_filter {
+            rp = rp.with_post_filter(0.02);
+        }
         let df = DfTract::new(DfParams::default(), &rp)
             .map_err(|e| DspError::Load(format!("DeepFilterNet3: {e}")))?;
         if df.hop_size != FRAME_SAMPLES || df.sr != crate::SAMPLE_RATE as usize {

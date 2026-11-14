@@ -56,6 +56,7 @@ pub struct PanelModel {
     pub strengths: Vec<(f32, &'static str)>,
     pub strength: f32,
     pub uses_strength: bool,
+    pub post_filter: bool,
     pub autostart: bool,
     pub cpu_percent: Option<f64>,
 }
@@ -68,6 +69,7 @@ pub enum PanelAction {
     PickOutput(String),
     PickModel(&'static str),
     PickStrength(f32),
+    SetPostFilter(bool),
     SetAutostart(bool),
     HintButton,
     Refresh,
@@ -474,10 +476,20 @@ fn draw(
             actions.push(PanelAction::PickStrength(db));
         }
     });
+    ui.add_enabled_ui(m.uses_strength, |ui| {
+        let mut pf = m.post_filter;
+        if ui
+            .checkbox(&mut pf, "Extra cleanup for clicks and crinkles")
+            .on_hover_text("DeepFilterNet's post-filter: removes leftover noise bursts, can make the voice slightly thinner.")
+            .changed()
+        {
+            actions.push(PanelAction::SetPostFilter(pf));
+        }
+    });
     let note = if m.uses_strength {
         "Strength limits how far noise is pushed down. Natural keeps some room sound."
     } else {
-        "Strength applies to DeepFilterNet3 only."
+        "Strength and extra cleanup apply to DeepFilterNet3 only."
     };
     ui.label(RichText::new(note).small().color(weak));
 

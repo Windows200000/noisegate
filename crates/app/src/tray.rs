@@ -250,6 +250,7 @@ struct Items {
     strength_menu: Submenu,
     /// (item, attenuation limit dB)
     strengths: Vec<(CheckMenuItem, f32)>,
+    post_filter: CheckMenuItem,
     autostart: CheckMenuItem,
     open_logs: MenuItem,
     quit: MenuItem,
@@ -488,6 +489,7 @@ impl App {
             strengths: STRENGTHS.iter().map(|&(l, d)| (d, l)).collect(),
             strength: cfg.attenuation_db,
             uses_strength: self.uses_strength(),
+            post_filter: cfg.post_filter,
             autostart: self.autostart,
             cpu_percent: self.pipeline.as_ref().map(cpu_percent),
         }
@@ -533,6 +535,16 @@ impl App {
                     let _ = c.save();
                     info!(attenuation_db = db, "user picked suppression strength");
                     // Only DeepFilterNet3 uses it.
+                    restart = deepfilter;
+                }
+            }
+            PanelAction::SetPostFilter(on) => {
+                let deepfilter = self.uses_strength();
+                let mut c = self.cfg.write().unwrap();
+                if c.post_filter != on {
+                    c.post_filter = on;
+                    let _ = c.save();
+                    info!(post_filter = on, "user toggled post-filter");
                     restart = deepfilter;
                 }
             }
@@ -625,6 +637,7 @@ impl App {
         for (i, db) in &items.strengths {
             i.set_checked((c.attenuation_db - db).abs() < 0.5);
         }
+        items.post_filter.set_checked(c.post_filter);
         items.autostart.set_checked(self.autostart);
     }
 
@@ -666,7 +679,8 @@ impl App {
         let uses_strength = self.uses_strength();
         items.strength_menu.set_enabled(uses_strength);
         items.strength_menu.set_text(if uses_strength {
-            format!("Strength:  {}", self.strength_name())
+            let pf = if self.cfg.read().unwrap().post_filter { " + extra cleanup" } else { "" };
+            format!("Strength:  {}{pf}", self.strength_name())
         } else {
             "Strength:  (DeepFilterNet3 only)".into()
         });
@@ -798,6 +812,9 @@ impl ApplicationHandler<UserEvent> for App {
         for (item, _) in &strengths {
             strength_menu.append(item).ok();
         }
+        let post_filter = CheckMenuItem::new("Extra cleanup for clicks and crinkles", true, cfg.post_filter, None);
+        strength_menu.append(&PredefinedMenuItem::separator()).ok();
+        strength_menu.append(&post_filter).ok();
 
         let autostart = CheckMenuItem::new("Start with Windows", true, self.autostart, None);
         let open_logs = MenuItem::new("Open log folder", true, None);
@@ -845,6 +862,7 @@ impl ApplicationHandler<UserEvent> for App {
             models,
             strength_menu,
             strengths,
+            post_filter,
             autostart,
             open_logs,
             quit,
@@ -911,6 +929,8 @@ impl ApplicationHandler<UserEvent> for App {
             PanelAction::PickModel(key)
         } else if let Some(&(_, db)) = items.strengths.iter().find(|(i, _)| i.id() == &id) {
             PanelAction::PickStrength(db)
+        } else if id == items.post_filter.id() {
+            PanelAction::SetPostFilter(items.post_filter.is_checked())
         } else if id == items.autostart.id() {
             PanelAction::SetAutostart(items.autostart.is_checked())
         } else if id == items.open_logs.id() {

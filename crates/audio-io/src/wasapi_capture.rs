@@ -6,11 +6,9 @@
 //! buffer-ready event the audio engine signals every period.
 //!
 //! Output of this module is always **mono f32 @ 48 kHz, 480-sample frames**.
-//! If the device's mix format differs we down-mix and (linear) resample
-//! inline. Linear resampling is fine for a near-rate match (most modern
-//! mics already negotiate 48 kHz); for 44.1 → 48 we sound a small quality
-//! cost for a much lighter dependency than rubato. Swap to `rubato` if
-//! quality matters.
+//! If the device's mix format differs we down-mix (only the channels that
+//! carry signal) and resample with a windowed-sinc filter inline, see
+//! `crate::resample`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -461,70 +459,39 @@ impl FrameAccumulator {
     }
 }
 
-/// Cheap inline downmix + linear resampler. Good enough for voice; replace
-/// with `rubato` if you ever want to ship music-grade quality.
+/// Device format → mono 48 kHz: mixes only the channels that carry signal,
+/// then resamples band-limited (see `crate::resample`).
 pub(crate) struct InlineConverter {
-    src_rate: u32,
-    src_channels: usize,
-    dst_rate: u32,
-    last_sample: f32,
-    /// Fractional position into the source stream; advanced by src/dst per
-    /// output sample.
-    phase: f64,
+    mixer: crate::resample::ChannelMixer,
+    resampler: Option<crate::resample::SincResampler>,
+    mono: Vec<f32>,
     out: Vec<f32>,
 }
 
 impl InlineConverter {
     pub fn new(src_rate: u32, src_channels: usize, dst_rate: u32) -> Self {
         Self {
-            src_rate,
-            src_channels,
-            dst_rate,
-            last_sample: 0.0,
-            phase: 0.0,
-            out: Vec::with_capacity(2048),
+            mixer: crate::resample::ChannelMixer::new(src_channels, src_rate),
+            resampler: (src_rate != dst_rate)
+                .then(|| crate::resample::SincResampler::new(src_rate, dst_rate)),
+            mono: Vec::with_capacity(4096),
+            out: Vec::with_capacity(4096),
         }
     }
 
     pub fn process(&mut self, interleaved: &[f32], frames: usize) -> &[f32] {
-        // Step 1: downmix to mono in a scratch buffer of length `frames`.
-        let mut mono = Vec::with_capacity(frames);
-        if self.src_channels == 1 {
-            mono.extend_from_slice(&interleaved[..frames]);
-        } else {
-            for f in 0..frames {
-                let base = f * self.src_channels;
-                let mut acc = 0.0f32;
-                for c in 0..self.src_channels {
-                    acc += interleaved[base + c];
-                }
-                mono.push(acc / self.src_channels as f32);
+        if self.mixer.mix(interleaved, frames, &mut self.mono) {
+            // 1-based, as Windows numbers inputs ("Analog 1/2").
+            let used: Vec<usize> = self.mixer.active_channels().iter().map(|c| c + 1).collect();
+            tracing::info!(?used, "mic input channels in use");
+        }
+        match &mut self.resampler {
+            None => &self.mono,
+            Some(r) => {
+                self.out.clear();
+                r.process(&self.mono, &mut self.out);
+                &self.out
             }
         }
-
-        // Step 2: linear-resample mono → dst_rate.
-        self.out.clear();
-        if self.src_rate == self.dst_rate {
-            self.out.extend_from_slice(&mono);
-            self.last_sample = *mono.last().unwrap_or(&self.last_sample);
-            return &self.out;
-        }
-
-        let ratio = self.src_rate as f64 / self.dst_rate as f64;
-        let total_src = mono.len() as f64;
-        while self.phase < total_src {
-            let idx = self.phase as usize;
-            let frac = self.phase - idx as f64;
-            let a = if idx == 0 { self.last_sample } else { mono[idx - 1] };
-            let b = mono.get(idx).copied().unwrap_or(self.last_sample);
-            self.out.push((a as f64 + (b as f64 - a as f64) * frac) as f32);
-            self.phase += ratio;
-        }
-        self.phase -= total_src;
-        if let Some(&s) = mono.last() {
-            self.last_sample = s;
-        }
-        &self.out
     }
 }
-

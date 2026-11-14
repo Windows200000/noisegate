@@ -25,6 +25,7 @@ mod log_format;
 #[cfg(windows)]
 mod panel;
 mod pipeline;
+mod process_wav;
 #[cfg(windows)]
 mod theme;
 #[cfg(windows)]
@@ -100,6 +101,11 @@ fn run() -> Result<()> {
         return list_devices();
     }
 
+    // Hidden: run a recording through every model for comparing by ear.
+    if let Some((input, out_dir)) = args.process_wav.as_ref() {
+        return process_wav::run(std::path::Path::new(input), std::path::Path::new(out_dir));
+    }
+
     // Hidden: render the tray icons for previewing (see tray::dump_icons).
     if let Some(dir) = args.dump_icons.as_deref() {
         return tray::dump_icons(std::path::Path::new(dir));
@@ -170,6 +176,7 @@ struct CliArgs {
     out: Option<String>,
     bypass: bool,
     dump_icons: Option<String>,
+    process_wav: Option<(String, String)>,
 }
 
 fn parse_args() -> CliArgs {
@@ -189,6 +196,11 @@ fn parse_args() -> CliArgs {
             }
             "--bypass" => out.bypass = true,
             "--dump-icons" => out.dump_icons = args.next(),
+            "--process-wav" => {
+                if let (Some(i), Some(o)) = (args.next(), args.next()) {
+                    out.process_wav = Some((i, o));
+                }
+            }
             "--console" => {} // handled in main() before anything prints
             _ => {} // ignore unknowns silently
         }
@@ -214,6 +226,9 @@ fn print_help() {
                                     (VB-Cable, VoiceMeeter, Steam Streaming Microphone).\n\
              --bypass               Start with denoising off (pass-through).\n\
              --console              Open a window with the live log.\n\
+             --process-wav IN OUT   Run a recording through every model and\n\
+                                    strength; writes one WAV per variant to\n\
+                                    the folder OUT, for comparing by ear.\n\
              -h, --help             Show this help.\n\
          \n\
          CONFIG FILE:\n\

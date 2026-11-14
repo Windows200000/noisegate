@@ -30,7 +30,7 @@ physical mic ─► WASAPI capture ─► ring A ─► DSP thread (denoiser) �
                                                     other apps pick the cable's microphone side as mic ◄┘
 ```
 
-Three dedicated MMCSS-priority threads. Lock-free SPSC ring buffers (8 frames ≈ 80 ms headroom). 480-sample (10 ms) frames end-to-end, the native frame size of both RNNoise and DeepFilterNet. Capture and render convert to and from the devices' own formats (any rate, any channel count, 32-bit float).
+Three dedicated MMCSS-priority threads. Lock-free SPSC ring buffers (8 frames ≈ 80 ms headroom). 480-sample (10 ms) frames end-to-end, the native frame size of both RNNoise and DeepFilterNet. Capture and render convert to and from the devices' own formats (any rate, any channel count, 32-bit float). On capture, only channels that carry signal are mixed (a mic on one input of a stereo interface keeps its full level), and resampling uses a windowed-sinc filter.
 
 ## Noise suppression models
 
@@ -41,7 +41,9 @@ Pick the model and strength in the tray menu; the choice is saved.
 | **DeepFilterNet3** | ✅ | ★★★★★ Removes fans, keyboards, traffic, music and other voices in the background. Full-band 48 kHz. | ~3% | +30 ms |
 | **RNNoise** | | ★★★ Good on steady noise (fans, hum), weaker on everything else. | <1% | +10 ms |
 
-DeepFilterNet3 has three strengths: **Maximum** (no limit), **Strong** (up to 24 dB less noise), and **Natural** (up to 12 dB, keeps some room tone).
+DeepFilterNet3 has three strengths: **Maximum** (no limit), **Strong** (up to 24 dB less noise), and **Natural** (up to 12 dB, keeps some room tone). **Extra cleanup for clicks and crinkles** turns on DeepFilterNet's post-filter, which removes leftover noise bursts at a small cost in voice fullness.
+
+To pick by ear, record yourself talking with the noise you care about and run `noisegate.exe --process-wav clip.wav out`. It writes the input as the denoiser sees it, plus one WAV per model and setting, into `out`.
 
 ## Install
 
@@ -117,6 +119,7 @@ NoiseGate normally runs without a console. When started from a terminal it print
 .\noisegate.exe --out "CABLE"        # write to a specific output device (this run only)
 .\noisegate.exe --bypass             # start with noise removal off
 .\noisegate.exe --console            # open a window with the live log
+.\noisegate.exe --process-wav clip.wav out   # render a recording through every model, to compare
 ```
 
 > **Bluetooth headsets**: opening a Bluetooth headset's mic switches it into Hands-Free mode (16 kHz mono, sounds bad). That's Windows behaviour; pick a USB or built-in mic instead.
@@ -131,6 +134,7 @@ output_device_id = ""         # empty = first virtual cable found
 enabled = true                # noise removal on/off
 denoiser = "deepfilter"       # "deepfilter" or "rnnoise"
 attenuation_db = 24.0         # DeepFilterNet3 limit: 100 = Maximum, 24 = Strong, 12 = Natural
+post_filter = false           # extra cleanup for clicks and crinkles (DeepFilterNet3)
 vbcable_prompt_dismissed = false
 auto_start = false
 ```

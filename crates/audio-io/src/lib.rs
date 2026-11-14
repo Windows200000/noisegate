@@ -15,6 +15,7 @@ pub mod format;
 pub mod mixformat;
 #[cfg(windows)]
 pub mod mmcss;
+pub mod resample;
 
 /// Convenience: promote the calling thread to MMCSS "Pro Audio" priority.
 /// Returns a guard; drop reverts. Used by the pipeline crate's DSP thread.

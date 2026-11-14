@@ -128,17 +128,36 @@ pub const BACKENDS: &[Backend] = &[
 /// Build the denoiser named by `key` (see [`BACKENDS`]). Unknown or empty
 /// keys fall back to the first compiled-in backend. `atten_lim_db` only
 /// affects backends that support limiting suppression (DeepFilterNet3).
+/// Settings for the backends that have any (currently DeepFilterNet3).
+#[derive(Debug, Clone, Copy)]
+pub struct DenoiserOptions {
+    /// Maximum attenuation in dB (100 = unlimited).
+    pub atten_lim_db: f32,
+    /// DeepFilterNet post-filter for residual noise bursts.
+    pub post_filter: bool,
+}
+
+impl Default for DenoiserOptions {
+    fn default() -> Self {
+        Self { atten_lim_db: 100.0, post_filter: false }
+    }
+}
+
 pub fn denoiser_by_key(key: &str, atten_lim_db: f32) -> Result<Box<dyn Denoiser>> {
+    denoiser_with(key, DenoiserOptions { atten_lim_db, ..Default::default() })
+}
+
+pub fn denoiser_with(key: &str, opts: DenoiserOptions) -> Result<Box<dyn Denoiser>> {
     let key = BACKENDS
         .iter()
         .find(|b| b.key == key)
         .or(BACKENDS.first())
         .map(|b| b.key)
         .unwrap_or("");
-    let _ = atten_lim_db;
+    let _ = opts;
     match key {
         #[cfg(feature = "deepfilter")]
-        "deepfilter" => Ok(Box::new(DeepFilter::new(atten_lim_db)?)),
+        "deepfilter" => Ok(Box::new(DeepFilter::new(opts.atten_lim_db, opts.post_filter)?)),
         #[cfg(feature = "rnnoise")]
         "rnnoise" => Ok(Box::new(RnNoise::new()?)),
         _ => Err(DspError::Load(
