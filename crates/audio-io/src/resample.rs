@@ -10,9 +10,35 @@
 //!   sampled, interpolated kernel table: no aliasing hiss or high-frequency
 //!   dulling, unlike linear interpolation, for any pair of rates.
 
+/// Which input channels to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChannelMode {
+    /// Mix the channels that carry signal (see `ChannelMixer`).
+    #[default]
+    Auto,
+    /// Only this channel (0-based).
+    Only(usize),
+    /// Average all channels.
+    All,
+}
+
+impl ChannelMode {
+    /// Parse the config value: "auto", "all", or a 1-based channel number.
+    pub fn from_config(s: &str) -> Self {
+        match s {
+            "all" | "both" => Self::All,
+            n => match n.parse::<usize>() {
+                Ok(n) if n >= 1 => Self::Only(n - 1),
+                _ => Self::Auto,
+            },
+        }
+    }
+}
+
 /// Per-channel level tracking for choosing which channels to mix.
 pub struct ChannelMixer {
     channels: usize,
+    mode: ChannelMode,
     /// Smoothed mean-square level per channel.
     power: Vec<f64>,
     /// Channels currently mixed (weight 1) or ignored (0).
@@ -31,10 +57,19 @@ impl ChannelMixer {
     const SILENT_DB: f64 = -80.0;
 
     pub fn new(channels: usize, rate: u32) -> Self {
+        Self::with_mode(channels, rate, ChannelMode::Auto)
+    }
+
+    pub fn with_mode(channels: usize, rate: u32, mode: ChannelMode) -> Self {
+        let active = match mode {
+            ChannelMode::Only(c) if c < channels => (0..channels).map(|i| i == c).collect(),
+            _ => vec![true; channels],
+        };
         Self {
             channels,
+            mode,
             power: vec![0.0; channels],
-            active: vec![true; channels],
+            active,
             since_eval: 0,
             // Re-evaluate once a second: often enough to follow a re-plugged
             // mic, rarely enough not to flip-flop during pauses.
@@ -75,7 +110,7 @@ impl ChannelMixer {
 
         let mut changed = false;
         self.since_eval += frames;
-        if self.since_eval >= self.eval_every {
+        if self.mode == ChannelMode::Auto && self.since_eval >= self.eval_every {
             self.since_eval = 0;
             let db = |p: f64| 10.0 * p.max(1e-20).log10();
             let loudest = self.power.iter().copied().fold(0.0, f64::max);

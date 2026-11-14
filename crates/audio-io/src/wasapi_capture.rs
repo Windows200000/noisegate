@@ -48,7 +48,16 @@ pub struct WasapiCapture {
 impl WasapiCapture {
     /// Open the given capture device and start delivering 480-sample frames
     /// to `sink`. The capture runs on a dedicated MMCSS "Pro Audio" thread.
-    pub fn start(device_id: &str, mut sink: Box<dyn FrameSink>) -> Result<Self> {
+    pub fn start(device_id: &str, sink: Box<dyn FrameSink>) -> Result<Self> {
+        Self::start_with(device_id, crate::resample::ChannelMode::Auto, sink)
+    }
+
+    /// Like `start`, choosing which input channels to use.
+    pub fn start_with(
+        device_id: &str,
+        mode: crate::resample::ChannelMode,
+        mut sink: Box<dyn FrameSink>,
+    ) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let device_id = device_id.to_string();
@@ -58,7 +67,7 @@ impl WasapiCapture {
         let thread = std::thread::Builder::new()
             .name("noisegate-capture".into())
             .spawn(move || {
-                let res = capture_loop(&device_id, &mut *sink, &stop_thread, &ready_tx);
+                let res = capture_loop(&device_id, mode, &mut *sink, &stop_thread, &ready_tx);
                 if let Err(e) = res {
                     tracing::error!(error = %e, "capture loop exited with error");
                     // ready_tx may already have been signaled; ignore.
@@ -99,6 +108,7 @@ impl Drop for WasapiCapture {
 
 fn capture_loop(
     device_id: &str,
+    mode: crate::resample::ChannelMode,
     sink: &mut dyn FrameSink,
     stop: &AtomicBool,
     ready_tx: &std::sync::mpsc::Sender<Result<()>>,
@@ -194,7 +204,7 @@ fn capture_loop(
 
         let mut accumulator = FrameAccumulator::new();
         let mut converter = if needs_convert {
-            Some(InlineConverter::new(device_rate, device_channels, SAMPLE_RATE))
+            Some(InlineConverter::new(device_rate, device_channels, SAMPLE_RATE, mode))
         } else {
             None
         };
@@ -469,9 +479,10 @@ pub(crate) struct InlineConverter {
 }
 
 impl InlineConverter {
-    pub fn new(src_rate: u32, src_channels: usize, dst_rate: u32) -> Self {
+    pub fn new(src_rate: u32, src_channels: usize, dst_rate: u32, mode: crate::resample::ChannelMode) -> Self {
+        tracing::info!(?mode, channels = src_channels, "mic channel mode");
         Self {
-            mixer: crate::resample::ChannelMixer::new(src_channels, src_rate),
+            mixer: crate::resample::ChannelMixer::with_mode(src_channels, src_rate, mode),
             resampler: (src_rate != dst_rate)
                 .then(|| crate::resample::SincResampler::new(src_rate, dst_rate)),
             mono: Vec::with_capacity(4096),

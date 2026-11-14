@@ -94,6 +94,7 @@ impl DenoiserHost {
     }
 }
 
+pub mod lowcut;
 #[cfg(feature = "rnnoise")]
 mod rnnoise;
 #[cfg(feature = "deepfilter")]
@@ -135,11 +136,13 @@ pub struct DenoiserOptions {
     pub atten_lim_db: f32,
     /// DeepFilterNet post-filter for residual noise bursts.
     pub post_filter: bool,
+    /// High-pass in front of the model against hum and rumble.
+    pub low_cut: bool,
 }
 
 impl Default for DenoiserOptions {
     fn default() -> Self {
-        Self { atten_lim_db: 100.0, post_filter: false }
+        Self { atten_lim_db: 100.0, post_filter: false, low_cut: true }
     }
 }
 
@@ -148,6 +151,11 @@ pub fn denoiser_by_key(key: &str, atten_lim_db: f32) -> Result<Box<dyn Denoiser>
 }
 
 pub fn denoiser_with(key: &str, opts: DenoiserOptions) -> Result<Box<dyn Denoiser>> {
+    let model = model_by_key(key, opts)?;
+    Ok(if opts.low_cut { Box::new(lowcut::WithLowCut::new(model)) } else { model })
+}
+
+fn model_by_key(key: &str, opts: DenoiserOptions) -> Result<Box<dyn Denoiser>> {
     let key = BACKENDS
         .iter()
         .find(|b| b.key == key)

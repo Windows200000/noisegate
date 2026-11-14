@@ -479,6 +479,11 @@ impl App {
             enabled: self.is_enabled(),
             mics,
             mic: cfg.input_device_id,
+            mic_channels: self.pipeline.as_ref().map(|p| p.mic_channels()).unwrap_or(1),
+            input_channel: cfg.input_channel.clone(),
+            input_gain_db: cfg.input_gain_db,
+            level_db: self.pipeline.as_ref().map(|p| p.input_level_db()),
+            low_cut: cfg.low_cut,
             outs,
             out: cfg.output_device_id,
             hint,
@@ -504,8 +509,39 @@ impl App {
                 let mut c = self.cfg.write().unwrap();
                 if c.input_device_id != id {
                     c.input_device_id = id;
+                    // Another device may be wired differently.
+                    c.input_channel = "auto".into();
                     let _ = c.save();
                     info!(input = %c.input_device_id, "user picked microphone");
+                    restart = true;
+                }
+            }
+            PanelAction::SetInputChannel(ch) => {
+                let mut c = self.cfg.write().unwrap();
+                if c.input_channel != ch {
+                    c.input_channel = ch;
+                    let _ = c.save();
+                    info!(input_channel = %c.input_channel, "user picked input channel");
+                    restart = true;
+                }
+            }
+            PanelAction::SetGain { db, save } => {
+                if let Some(p) = &self.pipeline {
+                    p.set_input_gain_db(db);
+                }
+                let mut c = self.cfg.write().unwrap();
+                c.input_gain_db = db;
+                if save {
+                    let _ = c.save();
+                    info!(input_gain_db = db, "user set input gain");
+                }
+            }
+            PanelAction::SetLowCut(on) => {
+                let mut c = self.cfg.write().unwrap();
+                if c.low_cut != on {
+                    c.low_cut = on;
+                    let _ = c.save();
+                    info!(low_cut = on, "user toggled low-cut");
                     restart = true;
                 }
             }

@@ -4,7 +4,7 @@
 //! at 8 frames (~80 ms) — enough headroom to absorb a scheduler hiccup,
 //! small enough that we don't hide actual problems.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -36,6 +36,12 @@ pub struct Pipeline {
     shutdown: Arc<AtomicBool>,
     output: Output,
     rate_mismatch: Option<RateMismatch>,
+    /// Linear gain applied before the denoiser (f32 bits), settable live.
+    gain: Arc<AtomicU32>,
+    /// Peak level after the gain, with ~1.5 s fall-off (f32 bits, linear).
+    level: Arc<AtomicU32>,
+    /// Channel count of the mic's shared-mode format.
+    mic_channels: u16,
 }
 
 /// The virtual cable's speaker and mic sides use different formats (sample
@@ -204,6 +210,7 @@ impl Pipeline {
             dsp::DenoiserOptions {
                 atten_lim_db: snapshot.attenuation_db,
                 post_filter: snapshot.post_filter,
+                low_cut: snapshot.low_cut,
             },
         )
             .context("loading denoiser")?;
@@ -213,6 +220,15 @@ impl Pipeline {
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_dsp = shutdown.clone();
+        let gain = Arc::new(AtomicU32::new(db_to_gain(snapshot.input_gain_db).to_bits()));
+        let level = Arc::new(AtomicU32::new(0f32.to_bits()));
+        let (gain_dsp, level_dsp) = (gain.clone(), level.clone());
+        let mic_channels = audio_io::wasapi_capture::endpoint_format(
+            &input_id,
+            audio_io::DeviceDirection::Capture,
+        )
+        .map(|(_, ch)| ch)
+        .unwrap_or(1);
 
         // DSP thread: pulls from ring A, processes, pushes to ring B.
         let dsp_thread = std::thread::Builder::new()
@@ -277,6 +293,16 @@ impl Pipeline {
                         }
                         continue;
                     }
+                    // Input gain, then the level meter (what the model sees).
+                    let g = f32::from_bits(gain_dsp.load(Ordering::Relaxed));
+                    let mut peak = 0f32;
+                    for s in frame.iter_mut() {
+                        *s = (*s * g).clamp(-1.0, 1.0);
+                        peak = peak.max(s.abs());
+                    }
+                    // Fall-off ~20 dB/s per 10 ms frame.
+                    let held = f32::from_bits(level_dsp.load(Ordering::Relaxed)) * 0.977;
+                    level_dsp.store(peak.max(held).to_bits(), Ordering::Relaxed);
                     if let Err(e) = host.process(&mut frame) {
                         warn!(error = %e, "denoiser error; passing frame through");
                     }
@@ -312,8 +338,9 @@ impl Pipeline {
             }
         }
 
-        let capture = audio_io::WasapiCapture::start(
+        let capture = audio_io::WasapiCapture::start_with(
             &input_id,
+            audio_io::resample::ChannelMode::from_config(&snapshot.input_channel),
             Box::new(Sink { prod: prod_a }),
         )
         .map_err(|e| anyhow::anyhow!(e))?;
@@ -355,7 +382,25 @@ impl Pipeline {
             shutdown,
             output,
             rate_mismatch,
+            gain,
+            level,
+            mic_channels,
         })
+    }
+
+    /// Change the input gain without restarting.
+    pub fn set_input_gain_db(&self, db: f32) {
+        self.gain.store(db_to_gain(db).to_bits(), Ordering::Relaxed);
+    }
+
+    /// Peak input level (after gain) in dBFS, held with a slow fall-off.
+    pub fn input_level_db(&self) -> f32 {
+        let l = f32::from_bits(self.level.load(Ordering::Relaxed));
+        20.0 * l.max(1e-6).log10()
+    }
+
+    pub fn mic_channels(&self) -> u16 {
+        self.mic_channels
     }
 
     /// Both WASAPI streams still running. False after a device error; the
@@ -418,4 +463,8 @@ impl Drop for Pipeline {
             let _ = t.join();
         }
     }
+}
+
+fn db_to_gain(db: f32) -> f32 {
+    10f32.powf(db.clamp(-24.0, 36.0) / 20.0)
 }

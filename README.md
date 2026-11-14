@@ -99,9 +99,10 @@ The tray icon shows the state, and morphs smoothly between states:
 **Left-click** the icon to open the settings panel above the taskbar. It stays open while you change things and closes when you click elsewhere or press Esc:
 
 - **On/off switch** and the current status.
-- **Microphone**: which physical mic to clean (system default or a specific one).
+- **Microphone**: which physical mic to clean (system default or a specific one). For 2-channel devices (audio interfaces), which input to use: Auto (the inputs that carry signal), Input 1, Input 2 or Both.
+- **Gain** (−12 to +24 dB) before the model, with a live input meter. Aim for peaks around −12 dB when speaking loudly.
 - **Virtual mic (output)**: which cable to write to (automatic, a specific cable, or any output device), with what to select in other apps, or a button to fix or install a virtual mic.
-- **Noise suppression**: model and strength, see [Noise suppression models](#noise-suppression-models).
+- **Noise suppression**: model, strength, extra cleanup, and **Cut hum and rumble** (an 80 Hz low-cut before the model, on by default), see [Noise suppression models](#noise-suppression-models).
 - **Start with Windows**: start NoiseGate when you log in (a per-user entry, visible in Task Manager → Startup apps).
 - **Refresh devices** (after plugging in a mic or installing a cable), **Logs**, **Quit**, and the CPU use.
 
@@ -135,6 +136,9 @@ enabled = true                # noise removal on/off
 denoiser = "deepfilter"       # "deepfilter" or "rnnoise"
 attenuation_db = 24.0         # DeepFilterNet3 limit: 100 = Maximum, 24 = Strong, 12 = Natural
 post_filter = false           # extra cleanup for clicks and crinkles (DeepFilterNet3)
+low_cut = true                # 80 Hz high-pass before the model (hum, rumble)
+input_gain_db = 0.0           # gain before the model
+input_channel = "auto"        # "auto", "all" or an input number ("1", "2")
 vbcable_prompt_dismissed = false
 auto_start = false
 ```

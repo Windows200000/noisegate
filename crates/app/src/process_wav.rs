@@ -11,14 +11,16 @@ use dsp::{DenoiserOptions, FRAME_SAMPLES, SAMPLE_RATE};
 
 /// (file name, backend key, options)
 fn variants() -> Vec<(&'static str, &'static str, DenoiserOptions)> {
-    let df = |atten_lim_db, post_filter| DenoiserOptions { atten_lim_db, post_filter };
+    let df = |atten_lim_db, post_filter, low_cut| DenoiserOptions { atten_lim_db, post_filter, low_cut };
+    let rn = |low_cut| DenoiserOptions { low_cut, ..Default::default() };
     vec![
-        ("02-dfn3-natural", "deepfilter", df(12.0, false)),
-        ("03-dfn3-strong", "deepfilter", df(24.0, false)),
-        ("04-dfn3-strong-cleanup", "deepfilter", df(24.0, true)),
-        ("05-dfn3-maximum", "deepfilter", df(100.0, false)),
-        ("06-dfn3-maximum-cleanup", "deepfilter", df(100.0, true)),
-        ("07-rnnoise", "rnnoise", DenoiserOptions::default()),
+        ("02-dfn3-natural", "deepfilter", df(12.0, false, true)),
+        ("03-dfn3-strong", "deepfilter", df(24.0, false, true)),
+        ("04-dfn3-strong-cleanup", "deepfilter", df(24.0, true, true)),
+        ("05-dfn3-maximum", "deepfilter", df(100.0, false, true)),
+        ("06-dfn3-maximum-cleanup", "deepfilter", df(100.0, true, true)),
+        ("07-rnnoise", "rnnoise", rn(true)),
+        ("08-dfn3-strong-no-lowcut", "deepfilter", df(24.0, false, false)),
     ]
 }
 

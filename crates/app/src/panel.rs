@@ -41,6 +41,14 @@ pub struct PanelModel {
     /// (capture device id — empty = system default, label)
     pub mics: Vec<(String, String)>,
     pub mic: String,
+    /// Channel count of the mic; a picker shows when it's 2 or more.
+    pub mic_channels: u16,
+    /// "auto", "all" or a 1-based channel number.
+    pub input_channel: String,
+    pub input_gain_db: f32,
+    /// Peak level after the gain (dBFS), None while stopped.
+    pub level_db: Option<f32>,
+    pub low_cut: bool,
     /// (render device id — empty = automatic, label)
     pub outs: Vec<(String, String)>,
     pub out: String,
@@ -66,6 +74,10 @@ pub struct PanelModel {
 pub enum PanelAction {
     SetEnabled(bool),
     PickMic(String),
+    SetInputChannel(String),
+    /// New gain in dB; `save` once the slider is released.
+    SetGain { db: f32, save: bool },
+    SetLowCut(bool),
     PickOutput(String),
     PickModel(&'static str),
     PickStrength(f32),
@@ -453,6 +465,31 @@ fn draw(
 
     section(ui, "Microphone");
     combo(ui, "mic", &m.mics, &m.mic, |id| actions.push(PanelAction::PickMic(id)));
+    if m.mic_channels >= 2 {
+        // Interfaces often put one mic on one input of a stereo pair.
+        let mut opts: Vec<(String, String)> = vec![("auto".into(), "Auto".into())];
+        for c in 1..=m.mic_channels.min(4) {
+            opts.push((c.to_string(), format!("Input {c}")));
+        }
+        opts.push(("all".into(), if m.mic_channels == 2 { "Both".into() } else { "All".into() }));
+        let items: Vec<(usize, &str)> = opts.iter().enumerate().map(|(i, (_, l))| (i, l.as_str())).collect();
+        if let Some(i) = segmented(ui, "chan", &items, |i| opts[*i].0 == m.input_channel) {
+            actions.push(PanelAction::SetInputChannel(opts[i].0.clone()));
+        }
+    }
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.label("Gain");
+        let mut db = m.input_gain_db;
+        ui.spacing_mut().slider_width = ui.available_width() - 70.0;
+        let r = ui.add(egui::Slider::new(&mut db, -12.0..=24.0).step_by(1.0).suffix(" dB"));
+        if r.changed() {
+            actions.push(PanelAction::SetGain { db, save: !r.dragged() });
+        } else if r.drag_stopped() {
+            actions.push(PanelAction::SetGain { db, save: true });
+        }
+    });
+    level_meter(ui, m.level_db, weak);
 
     section(ui, "Virtual mic (output)");
     combo(ui, "out", &m.outs, &m.out, |id| actions.push(PanelAction::PickOutput(id)));
@@ -476,6 +513,14 @@ fn draw(
             actions.push(PanelAction::PickStrength(db));
         }
     });
+    let mut lc = m.low_cut;
+    if ui
+        .checkbox(&mut lc, "Cut hum and rumble (below 80 Hz)")
+        .on_hover_text("Removes mains hum, desk thumps and handling noise before the model. Speech starts above it.")
+        .changed()
+    {
+        actions.push(PanelAction::SetLowCut(lc));
+    }
     ui.add_enabled_ui(m.uses_strength, |ui| {
         let mut pf = m.post_filter;
         if ui
@@ -519,6 +564,37 @@ fn draw(
             }
         });
     });
+}
+
+/// Input level bar (−60…0 dBFS) with the peak value; green, amber when
+/// loud, red near clipping.
+fn level_meter(ui: &mut egui::Ui, level_db: Option<f32>, weak: Color32) {
+    // Keep it moving while the panel is open.
+    ui.ctx().request_repaint_after(Duration::from_millis(50));
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 6.0), Sense::hover());
+    let track = ui.visuals().widgets.inactive.bg_stroke.color;
+    ui.painter().rect_filled(rect, CornerRadius::same(3), track);
+    let db = level_db.unwrap_or(-120.0);
+    let t = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+    if t > 0.0 {
+        let color = if db > -3.0 {
+            Color32::from_rgb(0xd1, 0x34, 0x38)
+        } else if db > -12.0 {
+            WARN
+        } else {
+            ACCENT
+        };
+        let mut fill = rect;
+        fill.set_width(rect.width() * t);
+        ui.painter().rect_filled(fill, CornerRadius::same(3), color);
+    }
+    let text = match level_db {
+        Some(d) if d > -0.5 => "Input clipping — lower the gain".to_string(),
+        Some(d) if d > -100.0 => format!("Input peak {d:.0} dB · aim for about −12 dB when speaking loudly"),
+        _ => "No input".to_string(),
+    };
+    ui.label(RichText::new(text).small().color(weak));
 }
 
 /// Full-width dropdown over (id, label) pairs; calls `pick` on a change.
