@@ -87,14 +87,14 @@ impl SoundTest {
         if clip.is_empty() {
             return Err(anyhow!("nothing recorded yet"));
         }
-        let out = playback_device()?;
+        let (out, out_name) = playback_device()?;
         self.played.store(0, Ordering::Relaxed);
         let render = WasapiRender::start(
             &out,
             Box::new(Player { clip, pos: self.played.clone() }),
         )
         .map_err(|e| anyhow!("can't play the test clip: {e}"))?;
-        info!("sound test: playing back");
+        info!(device = %out_name, "sound test: playing back");
         self.mode = Mode::Playing { _render: render, started: Instant::now() };
         Ok(())
     }
@@ -152,18 +152,25 @@ impl SoundTest {
     }
 }
 
-/// Default output, unless that's a virtual cable — playing the clip into
-/// the cable would send it to everyone in the call.
-fn playback_device() -> Result<String> {
+/// Windows' default output (the one the volume icon controls), unless
+/// that's a virtual device — playing the clip into a cable would send it to
+/// everyone in the call, and Steam's virtual speakers go nowhere.
+fn playback_device() -> Result<(String, String)> {
     let devices = DeviceList::enumerate().map_err(|e| anyhow!("listing outputs: {e}"))?;
-    let real = |d: &&audio_io::Device| d.virtual_cable().is_none() && !d.friendly_name.to_lowercase().contains("cable");
+    let real = |d: &&audio_io::Device| {
+        let name = d.friendly_name.to_lowercase();
+        d.virtual_cable().is_none()
+            && !["cable", "steam streaming", "voicemeeter", "virtual"].iter().any(|v| name.contains(v))
+    };
+    let default = audio_io::wasapi_capture::default_render_id().unwrap_or_default();
     devices
         .render
         .iter()
         .filter(real)
-        .find(|d| d.is_default)
+        .find(|d| d.id == default)
+        .or_else(|| devices.render.iter().filter(real).find(|d| d.is_default))
         .or_else(|| devices.render.iter().find(real))
-        .map(|d| d.id.clone())
+        .map(|d| (d.id.clone(), d.friendly_name.clone()))
         .ok_or_else(|| anyhow!("no speakers or headphones to play on"))
 }
 

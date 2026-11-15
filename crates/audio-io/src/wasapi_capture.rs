@@ -423,6 +423,22 @@ pub fn endpoint_format(device_id: &str, direction: DeviceDirection) -> Result<(u
     }
 }
 
+/// ID of Windows' default render endpoint for media ("console" role: what
+/// the volume icon controls), as opposed to the communications default.
+pub fn default_render_id() -> Result<String> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&CLSID_MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| AudioError::wasapi("CoCreateInstance(MMDeviceEnumerator)", e))?;
+        let dev = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .map_err(|e| AudioError::wasapi("GetDefaultAudioEndpoint", e))?;
+        let id = dev.GetId().map_err(|e| AudioError::wasapi("GetId", e))?;
+        Ok(id.to_string().unwrap_or_default())
+    }
+}
+
 unsafe fn find_device(
     enumerator: &IMMDeviceEnumerator,
     id: &str,
