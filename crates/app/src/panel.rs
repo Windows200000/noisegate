@@ -67,6 +67,10 @@ pub struct PanelModel {
     pub post_filter: bool,
     pub autostart: bool,
     pub cpu_percent: Option<f64>,
+    /// Name of the virtual mic the sound test records; None = no cable.
+    pub test_mic: Option<String>,
+    pub test: crate::soundtest::TestView,
+    pub test_error: Option<String>,
 }
 
 /// What the user did in the panel.
@@ -86,6 +90,9 @@ pub enum PanelAction {
     HintButton,
     Refresh,
     OpenLogs,
+    TestRecord,
+    TestPlay,
+    TestStop,
     Quit,
 }
 
@@ -538,6 +545,9 @@ fn draw(
     };
     ui.label(RichText::new(note).small().color(weak));
 
+    section(ui, "Sound test");
+    sound_test(ui, m, weak, actions);
+
     ui.add_space(10.0);
     ui.separator();
     ui.horizontal(|ui| {
@@ -564,6 +574,81 @@ fn draw(
             }
         });
     });
+}
+
+/// Record what other apps hear, then play it back.
+fn sound_test(ui: &mut egui::Ui, m: &PanelModel, weak: Color32, actions: &mut Vec<PanelAction>) {
+    use crate::soundtest::MAX_SECS;
+    const RED: Color32 = Color32::from_rgb(0xd1, 0x34, 0x38);
+    let Some(mic) = &m.test_mic else {
+        ui.label(
+            RichText::new("Needs a virtual mic as the output: the test records what other apps get from it.")
+                .small()
+                .color(weak),
+        );
+        return;
+    };
+    let t = m.test;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let w = (ui.available_width() - 4.0) / 2.0;
+        let rec = if t.recording {
+            egui::Button::new(RichText::new("Stop recording").color(Color32::WHITE)).fill(RED).stroke(Stroke::NONE)
+        } else {
+            egui::Button::new(format!("Record (up to {MAX_SECS} s)"))
+        };
+        if ui.add_enabled(!t.playing && m.enabled, rec.min_size(Vec2::new(w, 30.0))).clicked() {
+            actions.push(if t.recording { PanelAction::TestStop } else { PanelAction::TestRecord });
+        }
+        let play = if t.playing {
+            egui::Button::new(RichText::new("Stop").color(Color32::WHITE)).fill(ACCENT).stroke(Stroke::NONE)
+        } else {
+            egui::Button::new("Play back")
+        };
+        let can_play = !t.recording && t.clip_secs.is_some();
+        if ui.add_enabled(can_play, play.min_size(Vec2::new(w, 30.0))).clicked() {
+            actions.push(if t.playing { PanelAction::TestStop } else { PanelAction::TestPlay });
+        }
+    });
+
+    let (frac, color) = if t.recording {
+        (t.pos_secs / MAX_SECS as f32, RED)
+    } else if t.playing {
+        (t.pos_secs / t.clip_secs.unwrap_or(1.0).max(0.1), ACCENT)
+    } else {
+        (0.0, ACCENT)
+    };
+    if t.recording || t.playing {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 6.0), Sense::hover());
+        let track = ui.visuals().widgets.inactive.bg_stroke.color;
+        ui.painter().rect_filled(rect, CornerRadius::same(3), track);
+        let mut fill = rect;
+        fill.set_width(rect.width() * frac.clamp(0.0, 1.0));
+        ui.painter().rect_filled(fill, CornerRadius::same(3), color);
+    }
+
+    let (text, warn) = if let Some(e) = &m.test_error {
+        (e.clone(), true)
+    } else if !m.enabled {
+        ("Turn NoiseGate on to record a test.".to_string(), false)
+    } else if t.recording {
+        if t.pos_secs > 2.0 && t.peak_db < -60.0 {
+            (format!("Nothing arriving on {mic} yet."), true)
+        } else {
+            (format!("Recording {:.0} s · talk like you would in a call, add some noise", t.pos_secs), false)
+        }
+    } else if t.playing {
+        (format!("Playing {:.0} of {:.0} s on your speakers / headphones", t.pos_secs, t.clip_secs.unwrap_or(0.0)), false)
+    } else if let Some(len) = t.clip_secs {
+        if t.peak_db < -60.0 {
+            (format!("The {len:.0} s clip is silent: nothing came out of {mic}."), true)
+        } else {
+            (format!("{len:.0} s clip ready. Play back hears exactly what other apps got."), false)
+        }
+    } else {
+        (format!("Records {mic}, i.e. exactly what TeamSpeak / Discord get."), false)
+    };
+    ui.label(RichText::new(text).small().color(if warn { WARN } else { weak }));
 }
 
 /// Input level bar (−60…0 dBFS) with the peak value; green, amber when

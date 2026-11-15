@@ -133,7 +133,7 @@ fn read_wav(path: &Path) -> Result<(u32, usize, Vec<f32>)> {
 }
 
 /// Write 48 kHz mono 16-bit PCM.
-fn write_wav(path: &Path, samples: &[f32]) -> Result<()> {
+pub fn write_wav(path: &Path, samples: &[f32]) -> Result<()> {
     let n = samples.len() as u32;
     let mut out = Vec::with_capacity(44 + samples.len() * 2);
     out.extend_from_slice(b"RIFF");

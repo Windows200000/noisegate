@@ -107,6 +107,11 @@ pub fn log_dir() -> PathBuf {
     base_dir().join("logs")
 }
 
+/// The last sound test recording (what other apps heard).
+pub fn sound_test_path() -> PathBuf {
+    base_dir().join("sound-test.wav")
+}
+
 fn base_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))

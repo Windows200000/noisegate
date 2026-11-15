@@ -27,6 +27,8 @@ mod panel;
 mod pipeline;
 mod process_wav;
 #[cfg(windows)]
+mod soundtest;
+#[cfg(windows)]
 mod theme;
 #[cfg(windows)]
 mod tray;

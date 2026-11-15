@@ -142,6 +142,8 @@ pub fn run(cfg: Arc<RwLock<Config>>, pipeline: Pipeline) -> Result<()> {
         shown: look(IconState::Bypass),
         anim: None,
         last_auto_restart: Instant::now(),
+        sound_test: crate::soundtest::SoundTest::new(),
+        test_error: None,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -182,6 +184,9 @@ struct App {
     /// What the icon looks like right now (mid-animation: in between).
     shown: Look,
     anim: Option<IconAnim>,
+    /// Record-and-play-back of the virtual mic.
+    sound_test: crate::soundtest::SoundTest,
+    test_error: Option<String>,
 }
 
 /// A running icon morph from `from` to the look of `to`.
@@ -383,6 +388,9 @@ impl App {
             post_filter: cfg.post_filter,
             autostart: self.autostart,
             cpu_percent: self.pipeline.as_ref().map(cpu_percent),
+            test_mic: self.pipeline.as_ref().and_then(|p| p.virtual_mic()).map(|(_, name)| name.clone()),
+            test: self.sound_test.view(),
+            test_error: self.test_error.clone(),
         }
     }
 
@@ -498,6 +506,17 @@ impl App {
                     .arg(crate::config::log_dir())
                     .spawn();
             }
+            PanelAction::TestRecord => {
+                let mic = self.pipeline.as_ref().and_then(|p| p.virtual_mic()).map(|(id, _)| id.clone());
+                self.test_error = match mic {
+                    Some(id) => self.sound_test.start_recording(&id).err().map(|e| e.to_string()),
+                    None => Some("No virtual mic to record from.".into()),
+                };
+            }
+            PanelAction::TestPlay => {
+                self.test_error = self.sound_test.play().err().map(|e| e.to_string());
+            }
+            PanelAction::TestStop => self.sound_test.stop(),
             PanelAction::Quit => {
                 info!("quit requested");
                 event_loop.exit();
@@ -712,11 +731,23 @@ impl ApplicationHandler<UserEvent> for App {
         }
 
         self.tick_anim();
+        if self.sound_test.tick() {
+            if let Some(panel) = &self.panel {
+                panel.request_redraw();
+            }
+        }
 
         // Re-arm the wake-up every time: `wait_duration` is a deadline
         // (now + d), not an interval, so setting it once would leave a past
         // deadline and spin the loop at 100% of a core.
-        let mut next = Instant::now() + if self.anim.is_some() { ANIM_FRAME } else { IDLE_TICK };
+        let tick = if self.anim.is_some() {
+            ANIM_FRAME
+        } else if self.sound_test.is_active() {
+            Duration::from_millis(100)
+        } else {
+            IDLE_TICK
+        };
+        let mut next = Instant::now() + tick;
         if let Some(panel) = &mut self.panel {
             match panel.repaint_at {
                 Some(at) if at <= Instant::now() => {

@@ -42,6 +42,9 @@ pub struct Pipeline {
     level: Arc<AtomicU32>,
     /// Channel count of the mic's shared-mode format.
     mic_channels: u16,
+    /// (capture id, name) of the virtual mic other apps record from, when
+    /// the output is a known virtual cable.
+    virtual_mic: Option<(String, String)>,
 }
 
 /// The virtual cable's speaker and mic sides use different formats (sample
@@ -176,6 +179,15 @@ impl Pipeline {
                     _ => None,
                 }
             }
+            _ => None,
+        };
+
+        let virtual_mic = match output {
+            Output::Cable(c) => devices
+                .capture
+                .iter()
+                .find(|d| c.matches_name(&d.friendly_name))
+                .map(|d| (d.id.clone(), d.friendly_name.clone())),
             _ => None,
         };
 
@@ -385,6 +397,7 @@ impl Pipeline {
             gain,
             level,
             mic_channels,
+            virtual_mic,
         })
     }
 
@@ -397,6 +410,11 @@ impl Pipeline {
     pub fn input_level_db(&self) -> f32 {
         let l = f32::from_bits(self.level.load(Ordering::Relaxed));
         20.0 * l.max(1e-6).log10()
+    }
+
+    /// (capture id, name) of the virtual mic other apps hear us on.
+    pub fn virtual_mic(&self) -> Option<&(String, String)> {
+        self.virtual_mic.as_ref()
     }
 
     pub fn mic_channels(&self) -> u16 {

@@ -84,7 +84,7 @@ If none is installed, NoiseGate offers to open the VB-Cable download page. After
 
 Then, in TeamSpeak / Discord / Zoom / Teams / OBS, choose the virtual mic as your microphone, and turn off the app's own noise suppression so the two don't fight.
 
-> **Sanity test**: open the Windows **Voice Recorder**, set its mic to the virtual mic, and record 10 seconds with a fan or typing in the background. Turn noise removal off with the switch in the NoiseGate panel and record again. The difference should be obvious.
+> **Sanity test**: use **Sound test** in the settings panel. It records up to 30 seconds from the virtual mic, exactly what other apps get, and plays it back on your speakers or headphones. Try it with a fan or typing in the background, then again with noise removal switched off.
 
 ## The tray
 
@@ -103,6 +103,7 @@ The tray icon shows the state, and morphs smoothly between states:
 - **Gain** (−12 to +24 dB) before the model, with a live input meter. Aim for peaks around −12 dB when speaking loudly.
 - **Virtual mic (output)**: which cable to write to (automatic, a specific cable, or any output device), with what to select in other apps, or a button to fix or install a virtual mic.
 - **Noise suppression**: model, strength, extra cleanup, and **Cut hum and rumble** (an 80 Hz low-cut before the model, on by default), see [Noise suppression models](#noise-suppression-models).
+- **Sound test**: record up to 30 s from the virtual mic (what TeamSpeak / Discord actually receive) and play it back on your default speakers or headphones (never into the cable). The last clip is saved as `%APPDATA%\NoiseGate\sound-test.wav`.
 - **Start with Windows**: start NoiseGate when you log in (a per-user entry, visible in Task Manager → Startup apps).
 - **Refresh devices** (after plugging in a mic or installing a cable), **Logs**, **Quit**, and the CPU use.
 
