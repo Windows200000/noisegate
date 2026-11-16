@@ -36,3 +36,41 @@ impl Drop for ProAudio {
         }
     }
 }
+
+/// Keep a windowless tray process from being treated as background work.
+///
+/// While a game is in the foreground, Windows 11 puts a process with no
+/// visible window into "efficiency mode" (EcoQoS: low clocks, E-cores) and
+/// ignores its timer-resolution requests. The audio threads then miss their
+/// deadlines exactly when the CPU is busiest, which other apps hear as
+/// dropouts. Raise the process above normal (not realtime: that can starve
+/// the system) and opt out of both throttles. Best effort; failures only log.
+pub fn boost_process() {
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, ProcessPowerThrottling, SetPriorityClass, SetProcessInformation,
+        HIGH_PRIORITY_CLASS, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION, PROCESS_POWER_THROTTLING_STATE,
+    };
+    unsafe {
+        let me = GetCurrentProcess();
+        if let Err(e) = SetPriorityClass(me, HIGH_PRIORITY_CLASS) {
+            tracing::warn!(error = %e, "could not raise process priority");
+        }
+        // StateMask 0 with the bit in ControlMask = "never throttle this".
+        let state = PROCESS_POWER_THROTTLING_STATE {
+            Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+            ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+                | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
+            StateMask: 0,
+        };
+        if let Err(e) = SetProcessInformation(
+            me,
+            ProcessPowerThrottling,
+            &state as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        ) {
+            tracing::warn!(error = %e, "could not opt out of power throttling");
+        }
+    }
+}

@@ -288,7 +288,12 @@ impl Pipeline {
                                 );
                                 last_starve_log = std::time::Instant::now();
                             }
-                            std::thread::sleep(std::time::Duration::from_millis(2));
+                            // Woken by the capture thread on every new frame;
+                            // the timeout only bounds shutdown/stall checks.
+                            // (A sleep here depends on the system timer
+                            // resolution, which Windows coarsens for
+                            // background processes.)
+                            std::thread::park_timeout(std::time::Duration::from_millis(20));
                             continue;
                         }
                     };
@@ -334,10 +339,13 @@ impl Pipeline {
         // Capture sink: pushes into ring A.
         struct Sink<P: Producer<Item = Frame> + Send> {
             prod: P,
+            dsp: std::thread::Thread,
         }
         impl<P: Producer<Item = Frame> + Send> audio_io::wasapi_capture::FrameSink for Sink<P> {
             fn on_frame(&mut self, frame: &Frame) {
-                if self.prod.try_push(*frame).is_err() {
+                let pushed = self.prod.try_push(*frame).is_ok();
+                self.dsp.unpark();
+                if !pushed {
                     // DSP behind — overwrite oldest by popping (we don't
                     // have direct access here; the simplest cheap option is
                     // to just drop. Audible as a tiny click; far better
@@ -353,7 +361,10 @@ impl Pipeline {
         let capture = audio_io::WasapiCapture::start_with(
             &input_id,
             audio_io::resample::ChannelMode::from_config(&snapshot.input_channel),
-            Box::new(Sink { prod: prod_a }),
+            Box::new(Sink {
+                prod: prod_a,
+                dsp: dsp_guard.thread.as_ref().expect("dsp thread").thread().clone(),
+            }),
         )
         .map_err(|e| anyhow::anyhow!(e))?;
 

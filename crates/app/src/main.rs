@@ -122,6 +122,7 @@ fn run() -> Result<()> {
         .context("another NoiseGate instance is already running")?;
 
     info!("NoiseGate starting");
+    audio_io::mmcss::boost_process();
 
     // Always print the device inventory at startup so users can identify
     // which mic to pick — especially important to spot Bluetooth-HFP
